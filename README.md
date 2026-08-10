@@ -6,9 +6,11 @@ Each subdirectory contains a separate README file for the corresponding scripts.
 
 We recommend creating a set of jobs using the scripts provided in ```batch_run``` and then submitting these jobs using ```qbatch```. 
 
-See ```pyproject.toml``` for a list of python package dependencies.
+### Setup 
 
-TODO: use `uvr` to manage R package dependencies.
+```./setup.sh```
+* See ```pyproject.toml``` for a list of python package dependencies.
+* TODO: use `uvr` to manage R package dependencies.
 
 
 ### Order of operations
@@ -44,10 +46,10 @@ TODO: use `uvr` to manage R package dependencies.
   * k1: presynaptic neuronal loss (0-1): ONLY use when predicting atrophy 
   * k2: postsynaptic neuronal loss (deafferentation) parameter (0-1): ONLY use when predicting atrophy 
 
-Example usage (within the ```batch_run``` directory): 
+Example usage (within the ```algorithm``` directory): 
 
 ````
- python3 ../algorithm/abm_clearance_genes.py \
+ python3 abm_clearance_genes.py \
   -t 1000 \
   -p "../../derivatives/SIR_inputs/params_regionalized_voxel_weights_after_qc_0413_64pct.pkl" \
   -g "../../derivatives/yohan_ge_filt/mr10vv0.2/" \
@@ -64,3 +66,19 @@ Example usage (within the ```batch_run``` directory):
   -k2 0.42327816662213974
 ````
 
+Test example for speedup: no clearance, run within the ```algorithm``` directory, output stored in ```test```:
+
+````
+python3 abm_clearance_genes.py \
+  -t 1000 \
+  -p "../SIR_inputs/params_regionalized_voxel_weights_after_qc_0413_64pct.pkl" \
+  -o "../test/" \
+  -r "False" \
+  -e 1e-05 \
+  -d 0.1 \
+  -S 35 \
+  -v 104.87116708452713 \
+  -s 0.02122582417807315 \
+  -i 97.7903636896988 \
+  -x "no_clearance_sample"
+````

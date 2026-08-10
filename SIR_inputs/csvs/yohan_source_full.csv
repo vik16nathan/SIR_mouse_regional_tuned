@@ -1,0 +1,210 @@
+,sources
+0,Accessory olfactory bulb
+1,Anterior cingulate area dorsal part
+2,Anterior cingulate area ventral part
+3,Nucleus accumbens
+4,Anterodorsal nucleus
+5,Anterior hypothalamic nucleus
+6,Agranular insular area posterior part
+7,Agranular insular area ventral part
+8,Ansiform lobule
+9,Nucleus ambiguus
+10,Anteromedial nucleus dorsal part
+11,Anteromedial nucleus ventral part
+12,Anterior amygdalar area
+13,Agranular insular area dorsal part
+14,Anterior olfactory nucleus
+15,Anterior pretectal nucleus
+16,Arcuate hypothalamic nucleus
+17,Dorsal auditory area
+18,Primary auditory area
+19,Ventral auditory area
+20,Anteroventral nucleus of thalamus
+21,Basolateral amygdalar nucleus
+22,Basomedial amygdalar nucleus
+23,Bed nuclei of the stria terminalis
+24,Field CA1
+25,Field CA2
+26,Field CA3
+27,Central amygdalar nucleus
+28,Central lobule
+29,Central lateral nucleus of the thalamus
+30,Claustrum
+31,Central linear nucleus raphe
+32,Central medial nucleus of the thalamus
+33,Cortical amygdalar area anterior part
+34,Cortical amygdalar area posterior part
+35,Caudoputamen
+36,Superior central nucleus raphe
+37,Culmen
+38,Cuneiform nucleus
+39,Dorsal cochlear nucleus
+40,Dentate gyrus
+41,Dorsomedial nucleus of the hypothalamus
+42,Dentate nucleus
+43,Dorsal peduncular area
+44,Dorsal nucleus raphe
+45,Ectorhinal area
+46,Entorhinal area lateral part
+47,Entorhinal area medial part dorsal zone
+48,Endopiriform nucleus dorsal part
+49,Endopiriform nucleus ventral part
+50,Flocculus
+51,Fastigial nucleus
+52,Frontal pole cerebral cortex
+53,Fundus of striatum
+54,Globus pallidus external segment
+55,Globus pallidus internal segment
+56,Gigantocellular reticular nucleus
+57,Gustatory areas
+58,Intercalated amygdalar nucleus
+59,Inferior colliculus central nucleus
+60,Inferior colliculus dorsal nucleus
+61,Inferior colliculus external nucleus
+62,Infralimbic area
+63,Intermediodorsal nucleus of the thalamus
+64,Inferior olivary complex
+65,Interposed nucleus
+66,Interpeduncular nucleus
+67,Intermediate reticular nucleus
+68,Lateral amygdalar nucleus
+69,Lateral vestibular nucleus
+70,Lateral dorsal nucleus of thalamus
+71,Dorsal part of the lateral geniculate complex
+72,Ventral part of the lateral geniculate complex
+73,Lateral habenula
+74,Lateral hypothalamic area
+75,Lateral posterior nucleus of the thalamus
+76,Lateral preoptic area
+77,Lateral reticular nucleus
+78,Lateral septal nucleus caudal (caudodorsal) part
+79,Lateral septal nucleus rostral (rostroventral) part
+80,Lateral septal nucleus ventral part
+81,Magnocellular nucleus
+82,Magnocellular reticular nucleus
+83,Mediodorsal nucleus of thalamus
+84,Medullary reticular nucleus dorsal part
+85,Medullary reticular nucleus ventral part
+86,Medial amygdalar nucleus
+87,Medial geniculate complex dorsal part
+88,Medial geniculate complex medial part
+89,Medial geniculate complex ventral part
+90,Medial habenula
+91,Medial mammillary nucleus
+92,Main olfactory bulb
+93,Primary motor area
+94,Secondary motor area
+95,Medial preoptic nucleus
+96,Medial preoptic area
+97,Medial pretectal area
+98,Midbrain reticular nucleus
+99,Medial septal nucleus
+100,Medial vestibular nucleus
+101,Diagonal band nucleus
+102,Nucleus incertus
+103,Nucleus of the lateral lemniscus
+104,Nucleus of the lateral olfactory tract
+105,Nodulus (X)
+106,Nucleus of the optic tract
+107,Nucleus of the posterior commissure
+108,Nucleus of the solitary tract
+109,Orbital area lateral part
+110,Orbital area medial part
+111,Orbital area ventrolateral part
+112,Olfactory tubercle
+113,Posterior amygdalar nucleus
+114,Piriform-amygdalar area
+115,Periaqueductal gray
+116,Parasubiculum
+117,Parvicellular reticular nucleus
+118,Parabrachial nucleus
+119,Pontine central gray
+120,Perirhinal area
+121,Parafascicular nucleus
+122,Paraflocculus
+123,Pontine gray
+124,Paragigantocellular reticular nucleus dorsal part
+125,Paragigantocellular reticular nucleus lateral part
+126,Posterior hypothalamic nucleus
+127,Piriform area
+128,Prelimbic area
+129,Dorsal premammillary nucleus
+130,Posterior complex of the thalamus
+131,Posterior limiting nucleus of the thalamus
+132,Postsubiculum
+133,Peripeduncular nucleus
+134,Pedunculopontine nucleus
+135,Presubiculum
+136,Paramedian lobule
+137,Pontine reticular nucleus caudal part
+138,Pontine reticular nucleus
+139,Nucleus prepositus
+140,Principal sensory nucleus of the trigeminal
+141,Parataenial nucleus
+142,Posterior parietal association areas
+143,Paraventricular hypothalamic nucleus
+144,Paraventricular nucleus of the thalamus
+145,Periventricular hypothalamic nucleus posterior part
+146,Periventricular hypothalamic nucleus preoptic part
+147,Pyramus (VIII)
+148,Retrochiasmatic area
+149,Nucleus of reunions
+150,Rhomboid nucleus
+151,Red nucleus
+152,Midbrain reticular nucleus retrorubral area
+153,Retrosplenial area lateral agranular part
+154,Retrosplenial area dorsal part
+155,Retrosplenial area ventral part
+156,Reticular nucleus of the thalamus
+157,Subparaventricular zone
+158,Superior colliculus motor related
+159,Superior colliculus sensory related
+160,Septofimbrial nucleus
+161,Substantia innominata
+162,Simple lobule
+163,Submedial nucleus of the thalamus
+164,Substantia nigra compact part
+165,Substantia nigra reticular part
+166,Superior olivary complex
+167,Subparafascicular area
+168,Subparafascicular nucleus magnocellular part
+169,Subparafascicular nucleus parvicellular part
+170,Spinal vestibular nucleus
+171,Spinal nucleus of the trigeminal caudal part
+172,Spinal nucleus of the trigeminal interpolar part
+173,Spinal nucleus of the trigeminal oral part
+174,Primary somatosensory area barrel field
+175,Primary somatosensory area lower limb
+176,Primary somatosensory area mouth
+177,Primary somatosensory area nose
+178,Primary somatosensory area trunk
+179,Primary somatosensory area upper limb
+180,Supplemental somatosensory area
+181,Subthalamic nucleus
+182,Supramammillary nucleus
+183,Supratrigeminal nucleus
+184,Superior vestibular nucleus
+185,Temporal association areas
+186,Postpiriform transition area
+187,Tegmental reticular nucleus
+188,Triangular nucleus of septum
+189,Taenia tecta
+190,Tuberal nucleus
+191,Motor nucleus of trigeminal
+192,Ventral anterior-lateral complex of the thalamus
+193,Ventral cochlear nucleus
+194,Facial motor nucleus
+195,Visceral area
+196,Anterolateral visual area
+197,Anteromedial visual area
+198,Lateral visual area
+199,Primary visual area
+200,Posterolateral visual area
+201,posteromedial visual area
+202,Ventral medial nucleus of the thalamus
+203,Ventromedial hypothalamic nucleus
+204,Ventral posterolateral nucleus of the thalamus
+205,Ventral posteromedial nucleus of the thalamus
+206,Ventral posteromedial nucleus of the thalamus parvicellular part
+207,Ventral tegmental area
+208,Hypoglossal nucleus
