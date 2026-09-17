@@ -308,12 +308,13 @@ def markov_s_steady_state(weights, distance, region_size, clearance_rate, syngen
     M = scipy.sparse.bmat(((C_diag @ M_RR,      M_PR),
                            (M_RP @ C_diag,      M_PP)), format="csc")
 
-    ###2. Synthesis. Growth is likewise applied before clearance, so it feeds
-    ###R_new scaled by clearance, and feeds P_new via the same (clearance-
-    ###scaled) R->P weights.
+    ###2. Synthesis. Growth is added to R BEFORE clearance_step and s_spread_step
+    ###run, so it is subject to the exact same clearance-then-outflow scaling as
+    ###the retained-R term (C_diag @ M_RR) -- not just clearance alone -- and it
+    ###reaches P_new via the same (clearance-scaled) R->P weights.
     synthesis_rate = syngene
     growth = (synthesis_rate * region_size) * dt
-    B_R = clearance * growth
+    B_R = (C_diag @ M_RR) @ growth
     B_P = (M_RP @ C_diag) @ growth
     B = np.concatenate((B_R, B_P))
 
