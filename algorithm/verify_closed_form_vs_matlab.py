@@ -38,11 +38,13 @@ Usage:
 import argparse
 import os
 import pickle
+import time
 
 import numpy as np
 import pandas as pd
 import scipy.io as sio
 import scipy.sparse
+import scipy.sparse.linalg
 from scipy.stats import norm
 
 # --- parameters from main.m -------------------------------------------------
@@ -90,21 +92,21 @@ def markov_steady_state(weights, sconnMov, clearance, synthesis):
     """
     N = weights.shape[0]
 
-    M_RR = np.diag(1 - weights.sum(axis=1))
-    M_PP = np.diag(np.where(sconnMov.flatten(order="F") > 0, 1, 0) - sconnMov.flatten(order="F"))
+    M_RR = scipy.sparse.diags(1 - weights.sum(axis=1))
+    M_PP = scipy.sparse.diags(np.where(sconnMov.flatten(order="F") > 0, 1, 0) - sconnMov.flatten(order="F"))
 
     list_1_n = list(range(0, N))
     rows_i, cols_j = np.meshgrid(list_1_n, list_1_n, indexing="ij")
     list_1_n2 = list(range(0, N**2))
-    M_RP = scipy.sparse.coo_matrix((weights.flatten(order="F"), (list_1_n2, rows_i.flatten(order="F"))), shape=(N**2, N)).toarray()
-    M_PR = scipy.sparse.coo_matrix((sconnMov.flatten(order="F"), (cols_j.flatten(order="F"), list_1_n2)), shape=(N, N**2)).toarray()
+    M_RP = scipy.sparse.coo_matrix((weights.flatten(order="F"), (list_1_n2, rows_i.flatten(order="F"))), shape=(N**2, N))
+    M_PR = scipy.sparse.coo_matrix((sconnMov.flatten(order="F"), (cols_j.flatten(order="F"), list_1_n2)), shape=(N, N**2))
 
-    C_diag = np.diag(clearance)
-    M = np.vstack((np.hstack((C_diag @ M_RR, C_diag @ M_PR)),
-                  np.hstack((M_RP, M_PP))))
+    C_diag = scipy.sparse.diags(np.broadcast_to(clearance, (N,)))
+    M = scipy.sparse.bmat(((C_diag @ M_RR, C_diag @ M_PR),
+                           (M_RP,          M_PP)), format="csc")
 
     B = np.concatenate((synthesis, np.zeros(N**2)))
-    X, resid, rank, s = np.linalg.lstsq((np.eye(N + N**2) - M), B, rcond=None)
+    X = scipy.sparse.linalg.spsolve(scipy.sparse.eye(N + N**2, format="csc") - M, B)
     Rnor0 = X[0:N]
     Pnor0 = np.reshape(X[N:N + N**2], (N, N), order="F")
     return Rnor0, Pnor0
@@ -126,6 +128,12 @@ def iterative_steady_state(weights, sconn_mov, clearance, synthesis,
         if np.all(np.abs(r - r_prev) < rtol * np.maximum(np.abs(r_prev), 1e-300)):
             return r, p, t + 1
     return r, p, max_iter
+
+
+def _time_call(fn, *args, **kwargs):
+    t0 = time.perf_counter()
+    fn(*args, **kwargs)
+    return time.perf_counter() - t0
 
 
 def report(name, a, b):
@@ -176,21 +184,33 @@ def main():
                                              clearance, synthesis)
     pd.DataFrame(r_closed).to_csv("s_region_closed_form.csv")
     pd.DataFrame(p_closed).to_csv("s_edge_closed_form.csv")
-    print("\nwrote s_region_closed_form.csv, s_edge_closed_form.csv")
+
+    # timed separately, best-of-5, to avoid counting one-off import/cache warmup
+    n_reps = 5
+    t_closed = min(
+        _time_call(markov_steady_state, weights, sconn_mov, clearance, synthesis)
+        for _ in range(n_reps)
+    )
+    print(f"\nwrote s_region_closed_form.csv, s_edge_closed_form.csv"
+          f"  (best of {n_reps}: {t_closed*1e3:.2f} ms)")
 
     # (2) iterative ground truth
     print("\nrunning iterative growth loop to tight convergence "
           "(this takes a moment)...")
+    t0 = time.perf_counter()
     r_iter, p_iter, n_iter = iterative_steady_state(
         weights, sconn_mov, clearance, synthesis
     )
-    print(f"  converged after {n_iter} iterations")
+    t_iter_tight = time.perf_counter() - t0
+    print(f"  converged after {n_iter} iterations ({t_iter_tight:.2f} s)")
 
     # (2b) iterative with the *loose* stopping rule main.m/SIRsimulator.m used
+    t0 = time.perf_counter()
     r_loose, _, n_loose = iterative_steady_state(
         weights, sconn_mov, clearance, synthesis, rtol=1e-7
     )
-    print(f"  loose (1e-7) stopping rule: {n_loose} iterations")
+    t_iter_loose = time.perf_counter() - t0
+    print(f"  loose (1e-7) stopping rule: {n_loose} iterations ({t_iter_loose:.2f} s)")
 
     # (3) origresults.mat
     orig = sio.loadmat(os.path.join(args.repo, "origresults.mat"))
@@ -212,6 +232,14 @@ def main():
     print( "    -> origresults.mat is an under-converged snapshot "
            "(loose 1e-7 step rule);")
     print( "       the closed form matches the true fixed point instead.")
+
+    print("\n--- timing (N=%d regions) -----------------------------------------" % weights.shape[0])
+    print(f"  closed form (sparse Markov solve)         : {t_closed*1e3:9.2f} ms")
+    print(f"  iterative loop, loose 1e-7 stop ({n_loose:>7} it): {t_iter_loose*1e3:9.2f} ms")
+    print(f"  iterative loop, tight  1e-13 stop ({n_iter:>6} it): {t_iter_tight*1e3:9.2f} ms")
+    print(f"  speedup vs loose-converged loop  : {t_iter_loose / t_closed:8.1f}x")
+    print(f"  speedup vs tightly-converged loop: {t_iter_tight / t_closed:8.1f}x")
+
     return 0 if ok else 1
 
 

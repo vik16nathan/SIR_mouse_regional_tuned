@@ -33,6 +33,7 @@ sys.path.insert(1, './SIR_mouse/model/')
 from AgentBasedModel import AgentBasedModel
 from scipy.stats import zscore, norm
 import scipy.sparse
+import scipy.sparse.linalg
 from tqdm import tqdm
 import argparse
 import time
@@ -178,6 +179,155 @@ def load_clearance(clearance_gene=None):
         # normalizes and transforms the data, and returns the resulting array as a cumulative distribution function
 
 
+def iterative_s_steady_state(abm, eps=1e-5, max_iter=1_000_000_000):
+    """Iteratively converge the normal (S) alpha-syn population to steady state.
+
+    Runs the original per-timestep update from AgentBasedModel.py --
+    ``growth_step`` / ``clearance_step`` / ``s_spread_step`` -- until the
+    relative change per region drops below ``eps``. ``abm`` must already have
+    its growth/clearance/spread processes configured (``set_growth_process``,
+    ``set_clearance_process``, ``set_spread_process``, ``update_spread_process``)
+    and ``abm.dt`` set to the desired timestep.
+
+    This is the reference the Markov closed form (``markov_s_steady_state``)
+    replaces; kept around for verification and for callers that want the
+    iterative trajectory itself, not just its fixed point.
+    """
+    for t in range(max_iter):
+        prev = np.copy(abm.s_region)
+        abm.growth_step()
+        abm.clearance_step()
+        abm.s_spread_step()
+        if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
+            break
+    return abm.s_region, abm.s_edge, t + 1
+
+
+def markov_s_steady_state(weights, distance, region_size, clearance_rate, syngene, v, spread_rate, dt):
+    """Closed-form steady state of the normal (S) alpha-syn growth process --
+    the protein distribution reached *before* any misfolded seed is injected.
+
+    This is the fixed point of AgentBasedModel's own per-timestep update, in
+    its own order -- growth_step() then clearance_step() then s_spread_step()
+    -- generalized to N_s (sources) != N_t (targets): targets N_s..N_t-1 have
+    no matching source region and act as sinks (e.g. RH-only sources spreading
+    into whole-brain, RH+LH targets; Rahayel et al., 2022). Weights are turned
+    into a per-step transition probability exactly as AgentBasedModel.__init__
+    does (row-normalize including the raw diagonal, zero the diagonal, scale
+    by spread_rate) -- NOT SIRsimulator4.m's blend-then-normalize, which
+    corresponds to a different (MATLAB-side) weighting convention.
+
+    Because growth+clearance are applied to R *before* the move step here
+    (unlike SIRsimulator4.m, which moves first and applies clearance+growth
+    after), growth only reaches R_new after being scaled by clearance, and the
+    edges only receive already-cleared R -- see the M/B construction below.
+
+    Parameters
+    ----------
+    weights : (N_s, N_t) ndarray
+        Raw structural connectivity strength, row i = source region i's
+        outgoing connections.
+    distance : (N_s, N_t) ndarray
+        Structural connectivity length; 0 where disconnected.
+    region_size : (N_t,) ndarray
+        Region sizes (voxel counts), already extended to the target space.
+    clearance_rate : float or (N_t,) ndarray
+        Per-region clearance rate.
+    syngene : (N_t,) ndarray
+        Per-region growth (synthesis) rate.
+    v : float
+        Spreading speed along edges.
+    spread_rate : float
+        Probability of leaving a region per unit time; same parameter as
+        AgentBasedModel's ``update_spread_process(spread_scale=spread_rate)``.
+    dt : float
+        Timestep.
+
+    Returns
+    -------
+    Rnor0 : (N_t,) ndarray
+        Steady-state normal alpha-syn population per region.
+    Pnor0 : (N_s, N_t) ndarray
+        Steady-state normal alpha-syn population per edge.
+    """
+    sconnMov = v / distance * dt
+    sconnMov[distance == 0] = 0                  # zero where disconnected (AgentBasedModel.dist_inv)
+    N_s = weights.shape[0]  ###number of rows
+    N_t = weights.shape[1]  ###number of columns.
+
+    ###If N_s = N_t, square matrix (Zheng et al., 2019; single hemisphere)
+    ###Otherwise, for RH sources and whole-brain targets, N_t = 2*N_s (Rahayel et al., 2022), and
+    ###RH regions serve as SINKS.
+
+    ###AgentBasedModel.__init__'s own weighting: row-normalize (including
+    ###whatever raw self-weight is on the diagonal), zero the diagonal, then
+    ###scale by spread_rate. A source's own "self" position is (i, i) for
+    ###i < N_s, since sources is a prefix of targets.
+    diag_idx = np.arange(N_s)
+    weights = weights / weights.sum(axis=1, keepdims=True)
+    weights[diag_idx, diag_idx] = 0
+    weights = weights * spread_rate * dt
+
+    print("Calculate S protein steady state...")
+    ###1. Build the Markov Transition Components
+    ###To make this efficient and prevent memory explosion, we use sparse matrices.
+
+    ###[R -> R]: Proteins that stay in regions (1 minus sum of outward weights)
+    ###Sink-only regions (targets with no matching source, i.e. index >= N_s) never
+    ###send to edges, so they retain 100% of their population each step.
+    M_RR_diag = np.ones(N_t)
+    M_RR_diag[:N_s] = 1 - weights.sum(axis=1)
+    M_RR = scipy.sparse.diags(M_RR_diag)
+
+    ###[P -> P]: Proteins that stay in paths (1 minus outward path connections)
+    M_PP = scipy.sparse.diags(np.where(sconnMov.flatten(order="F") > 0, 1, 0) - sconnMov.flatten(order="F"))
+
+    ###For moving between R and P, we map the 2D matrix indices to the 1D vector
+    list_1_n_s = list(range(0, N_s))
+    list_1_n_t = list(range(0, N_t))
+
+    rows_i, cols_j = np.meshgrid(list_1_n_s, list_1_n_t, indexing="ij")
+
+    ###[R -> P]: R(i) sends proteins to P(i,j) based on weights(i,j)
+    ###rows_i(:) gives the source region 'i' for every linear index in P
+    list_1_n2 = list(range(0, N_s*N_t))
+    M_RP = scipy.sparse.coo_matrix((weights.flatten(order="F"), (list_1_n2, rows_i.flatten(order="F"))), shape=(N_s*N_t, N_t))
+
+    ###[P -> R]: P(i,j) sends proteins to R(j) based on sconnMov(i,j)
+    ###cols_j(:) gives the destination region 'j' for every linear index in P
+    M_PR = scipy.sparse.coo_matrix((sconnMov.flatten(order="F"), (cols_j.flatten(order="F"), list_1_n2)), shape=(N_t, N_s*N_t))
+
+    ###Combine into a single Movement matrix. Unlike SIRsimulator4.m (move,
+    ###THEN clearance+growth), AgentBasedModel applies growth+clearance to R
+    ###BEFORE the move: so clearance multiplies the retained-R term (M_RR) and
+    ###the R->P outflow (M_RP, on its R side), but NOT the P->R arrival (M_PR),
+    ###since that arrival is added after clearance_step has already run.
+    clearance = np.broadcast_to(np.exp(-clearance_rate * dt), (N_t,))
+
+    C_diag = scipy.sparse.diags(clearance)
+    M = scipy.sparse.bmat(((C_diag @ M_RR,      M_PR),
+                           (M_RP @ C_diag,      M_PP)), format="csc")
+
+    ###2. Synthesis. Growth is likewise applied before clearance, so it feeds
+    ###R_new scaled by clearance, and feeds P_new via the same (clearance-
+    ###scaled) R->P weights.
+    synthesis_rate = syngene
+    growth = (synthesis_rate * region_size) * dt
+    B_R = clearance * growth
+    B_P = (M_RP @ C_diag) @ growth
+    B = np.concatenate((B_R, B_P))
+
+    ###3. Run the Markov Loop
+    print('normal alpha synuclein growth (Markov Analytic Solution)')
+    X = scipy.sparse.linalg.spsolve(scipy.sparse.eye(N_t + N_s*N_t, format="csc") - M, B)
+
+    ###4. Unpack results back to original shapes
+    Rnor0 = X[0:N_t]
+    Pnor0 = np.reshape(X[N_t:N_t + N_s*N_t], (N_s, N_t), order="F")
+
+    return Rnor0, Pnor0
+
+
 if __name__ == "__main__":
     # run ABM
     # read arguments
@@ -225,89 +375,14 @@ if __name__ == "__main__":
     # calls several functions to load the model parameters, 
         # the clearance rate of proteins, and to set up the growth, clearance, and spreading processes of the ABM
 
-    ###########SHOULD BE ABLE TO GET RID OF ENTIRE S_SPREAD_STEP BASED ON CLOSED-FORM SOLUTION###############
-    # growth process
-    #print("Begin protein growth process....")
-    #start_time = time.time()
-    #for t in range(30000):
-    #    prev = np.copy(abm.s_region)
-    #    abm.growth_step()
-    #    abm.clearance_step()
-    #    abm.s_spread_step()
-    #    if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
-    #        #print("entered")
-    #        break
-    #abm.dt = 0.1
-    #for t in range(500000000):
-    #    prev = np.copy(abm.s_region)
-    #    abm.growth_step()
-    #    abm.clearance_step()
-    #    abm.s_spread_step()
-    #    if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
-    #        break
-    #abm.dt = dt
-    #for t in range(1000000000):
-    #    prev = np.copy(abm.s_region)
-    #    abm.growth_step()
-    #    abm.clearance_step()
-    #    abm.s_spread_step()
-    #    if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
-    #        break
-    #stop_time = time.time()
-    #elapsed_time = stop_time - start_time
-    #print(f"Protein growth time: {elapsed_time:.4f} seconds")
-    # runs the protein growth process in three stages
-    # In each stage, the ABM model computes the protein growth, clearance, and spreading steps until the growth process stops, 
-    # which is detected by comparing the changes in protein concentrations between time steps
-
     ###########################################################################################################
-    #####################TODO: ###########################
+    ###S protein steady state: closed-form Markov solution (see markov_s_steady_state).
+    ###Replaces the iterative growth_step/clearance_step/s_spread_step loop
+    ###(see iterative_s_steady_state for that reference implementation).
 
-    sconnMov = v / distance * dt
-    sconnMov[distance == 0] = 0                  # SIRsimulator4.m l.39: sconnMov(sconnLen == 0) = 0
-    N = len(sources)
-    print("Calculate S protein steady state...")
-    ###1. Build the Markov Transition Components
-    ###To make this efficient and prevent memory explosion, we use sparse matrices.
-
-    ###[R -> R]: Proteins that stay in regions (1 minus sum of outward weights)
-    M_RR = np.diag(1 - weights.sum(axis=1))
-
-    ###[P -> P]: Proteins that stay in paths (1 minus outward path connections)
-    M_PP = np.diag(np.where(sconnMov.flatten(order="F") > 0, 1, 0) - sconnMov.flatten(order="F"))
-
-    ###For moving between R and P, we map the 2D matrix indices to the 1D vector
-    list_1_n = list(range(0, N))
-    rows_i, cols_j = np.meshgrid(list_1_n, list_1_n, indexing="ij")
-
-    ###[R -> P]: R(i) sends proteins to P(i,j) based on weights(i,j)
-    ###rows_i(:) gives the source region 'i' for every linear index in P
-    list_1_n2 = list(range(0, N**2))
-    M_RP = scipy.sparse.coo_matrix((weights.flatten(order="F"), (list_1_n2, rows_i.flatten(order="F"))), shape=(N**2, N)).toarray()
-
-    ###[P -> R]: P(i,j) sends proteins to R(j) based on sconnMov(i,j)
-    ###cols_j(:) gives the destination region 'j' for every linear index in P
-    M_PR = scipy.sparse.coo_matrix((sconnMov.flatten(order="F"), (cols_j.flatten(order="F"), list_1_n2)), shape=(N, N**2)).toarray()
-
-    ###Combine into a single Movement matrix with clearance in the regions afterwards:
-    clearance = np.exp(-clearance_rate * dt)
-
-    C_diag = np.diag(clearance)
-    M = np.vstack((np.hstack((C_diag @ M_RR, C_diag @ M_PR)),
-                  np.hstack((M_RP, M_PP))))
-
-    ###2. Synthesis
-    synthesis_rate = syngene
-    synthesis = (synthesis_rate * region_size) * dt
-    B = np.concatenate((synthesis, np.zeros(N**2)))
-
-    ###3. Run the Markov Loop
-    print('normal alpha synuclein growth (Markov Analytic Solution)')
-    X, resid, rank, s = np.linalg.lstsq((np.eye(N + N**2) - M), B, rcond=None)
-
-    ###4. Unpack results back to original shapes
-    Rnor0 = X[0:N]
-    Pnor0 = np.reshape(X[N:N + N**2], (N, N), order="F")
+    Rnor0, Pnor0 = markov_s_steady_state(
+        weights, distance, region_size, clearance_rate, syngene, v, spread_rate, dt
+    )
 
     ####Assign S values to ABM
 
