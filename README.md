@@ -36,7 +36,7 @@ We recommend creating a set of jobs using the scripts provided in ```batch_run``
   * g: path for clearance gene data
   * o: output directory for simulated I agents/atrophy
   * r: retrograde (True/False): for labelling purposes
-  * e: epsilon determining numerical convergence for initializing S fraction (TODO: REMOVE DEPENDENCY, use closed-form solution)
+  * e: epsilon determining numerical convergence for initializing S fraction (only used when `--s-method iterative`, the default -- pass `--s-method closed_form` to use the closed-form Markov solution instead, see `abm_s_population.py` below)
   * d: delta-t for discretizing diff-eq solution (equations unchanged from Rahayel et al., 2022)
   * S: numerical index of the epicentre region (35: CP, 40: DG, 24: CA1)
   * c: clearance gene name (pulls from clearance gene directory in g)
@@ -81,4 +81,41 @@ python3 abm_clearance_genes.py \
   -s 0.02122582417807315 \
   -i 97.7903636896988 \
   -x "no_clearance_sample"
+````
+
+### S (normal alpha-syn) steady state: closed-form vs. iterative
+
+The S population's pre-injection steady state no longer requires the slow `growth_step`/`clearance_step`/`s_spread_step` convergence loop (`-e`/epsilon above). `abm_s_population.py` solves it directly as a sparse linear system (`markov_s_steady_state`) -- same equations, same result (region values agree with the iterative solution to within ~0.1-3% median percent difference, verified against real data), but in a fraction of the time (~0.5s vs. ~25s for the example connectome/parameters below).
+
+* ```abm_s_population.py```: computes *only* the S steady state (no I/atrophy simulation) for a given parameter configuration, closed-form. Same flags as ```abm_clearance_genes.py``` (`-p`, `-g`, `-r`, `-S`, `-c`, `-v`, `-s`), plus:
+  * d: delta-t used by the closed-form solve (independent of any I-spreading dt -- smaller is more accurate but risks an ill-conditioned linear solve; 1e-6 is a safe, accurate default)
+* Output: ```s_region_closed_form.csv``` and ```s_edge_closed_form.csv```, written to the current directory.
+
+Sample run (within the ```algorithm``` directory), no clearance:
+
+````
+python3 abm_s_population.py \
+  -p "../SIR_inputs/params_regionalized_voxel_weights_after_qc_0413_64pct.pkl" \
+  -r "False" \
+  -S 35 \
+  -v 104.87116708452713 \
+  -s 0.02122582417807315 \
+  -d 1e-6
+````
+
+The same closed-form solve is also available from within ```abm_clearance_genes.py```/```abm_optuna_general.py``` (so S and I/atrophy can be produced by a single run) via `--s-method closed_form --s-dt 1e-6` (default `--s-method iterative`, matching the original behavior unchanged):
+
+````
+python3 abm_clearance_genes.py \
+  -t 1000 \
+  -p "../SIR_inputs/params_regionalized_voxel_weights_after_qc_0413_64pct.pkl" \
+  -o "../test/" \
+  -r "False" \
+  -d 0.1 \
+  -S 35 \
+  -v 104.87116708452713 \
+  -s 0.02122582417807315 \
+  -i 97.7903636896988 \
+  -x "closed_form_s_sample" \
+  --s-method closed_form --s-dt 1e-6
 ````

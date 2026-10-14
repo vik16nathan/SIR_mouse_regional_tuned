@@ -6,6 +6,8 @@ import pickle
 sys.path.insert(1, './SIR_mouse/model/')
 from AgentBasedModel import AgentBasedModel
 from scipy.stats import zscore, norm
+import scipy.sparse
+import scipy.sparse.linalg
 from tqdm import tqdm
 import argparse
 import optuna
@@ -16,7 +18,7 @@ Snca_dir_default="../../derivatives/yohan_ge_filt/mr10vv0.2/"
 #V_MAX = 750 ###calculated maximum v=750 ensures that edge_to_region <= s_edge in each region
 ##we observe lots of overflow errors after v=500 in Optuna trials
 V_MAX = 500
-SIR_input_dir="../../derivatives/SIR_inputs/"
+SIR_input_dir="../SIR_inputs/"
 DEFAULT_PARAMS_ANTERO=SIR_input_dir+"params_regionalized_voxel_weights_after_qc_0413_64pct.pkl"
 DEFAULT_PARAMS_RETRO=SIR_input_dir+"params_regionalized_voxel_weights_after_qc_0413_64pct_retro.pkl"
 #Hipp injection (see find_peak_fit())
@@ -36,7 +38,7 @@ def parse_arguments():
         "-c", "--clearance", default=None, dest="clearance_gene", type=none_or_str,
         help="Specify the gene modulating clearance (omit, or pass 'None', for uniform clearance)"
     )
-    
+
     parser.add_argument(
         "-r", "--retro", default=False, dest="retro",
         type=str2bool, nargs='?', help="Retrograde spreading (default False) "
@@ -73,6 +75,17 @@ def parse_arguments():
     parser.add_argument(
         "-n", dest="study_name",
          nargs='?', help="Study name")
+    parser.add_argument(
+        "--s-method", default="iterative", choices=["iterative", "closed_form"],
+        dest="s_method", help="How to compute the S (normal alpha-syn) steady "
+        "state before injection: the original iterative convergence loop, or "
+        "the closed-form Markov solution (see abm_s_population.py)"
+    )
+    parser.add_argument(
+        "--s-dt", default=1e-6, type=float, dest="s_dt",
+        help="Timestep used by the closed-form S solve (--s-method closed_form only); "
+        "independent of -d/--delta-t, which controls the I spreading simulation"
+    )
     args = parser.parse_args()
     if args.params is None:
         args.params = DEFAULT_PARAMS_RETRO if args.retro else DEFAULT_PARAMS_ANTERO
@@ -95,7 +108,7 @@ def none_or_str(v):
     return v
 
 def load_params(connectome):
- 
+
     # load homogeneous values
     # choose the rate from 0.1 to 0.9
     #homorate = 0.5
@@ -113,31 +126,80 @@ def load_params(connectome):
     sys.modules["numpy._core.numeric"] = np.core.numeric
     ge = pd.read_pickle(Snca_dir_default+'Snca.pkl')
 
-    syngene = ge.loc[sources, "Snca"] #can modify to be another gene if needed... 
+    syngene = ge.loc[sources, "Snca"] #can modify to be another gene if needed...
     syngene = norm.cdf(zscore(syngene))
 
     return (
             weights, distance, np.append(region_size, region_size),
             sources, targets, np.append(syngene, syngene)
         )
-         
-def load_clearance(clearance_gene=None): 
+
+def load_clearance(clearance_gene=None):
     if clearance_gene is None:
         return 0.5 # default clearance rate
         # if clearance_gene is not specified (i.e., it is None), the function returns the default clearance rate of 0.5
     else:
         ge = pd.read_pickle(clearance_gene_dir+clearance_gene+'.pkl')
         epr=ge.loc[:,clearance_gene]
-        #epr = ge.loc[sources, clearance_gene] 
-        # #everything is in the right order - see SIR_mouse_exploration.ipynb on cicws        
+        #epr = ge.loc[sources, clearance_gene]
+        # #everything is in the right order - see SIR_mouse_exploration.ipynb on cicws
         epr = np.append(epr, epr)
         # appends the data to itself
 
         return norm.cdf(zscore(epr.flatten()))
         # normalizes and transforms the data, and returns the resulting array as a cumulative distribution function
 
+
+def markov_s_steady_state(weights, distance, region_size, clearance_rate, syngene, v, spread_rate, dt):
+    """Closed-form steady state of the S (normal alpha-syn) growth process --
+    ported verbatim from abm_s_population.py in this same project, see that
+    file's docstring for the full derivation.
+    """
+    sconnMov = v / distance * dt
+    sconnMov[distance == 0] = 0
+    N_s = weights.shape[0]
+    N_t = weights.shape[1]
+
+    diag_idx = np.arange(N_s)
+    weights = weights / weights.sum(axis=1, keepdims=True)
+    weights[diag_idx, diag_idx] = 0
+    weights = weights * spread_rate * dt
+
+    M_RR_diag = np.ones(N_t)
+    M_RR_diag[:N_s] = 1 - weights.sum(axis=1)
+    M_RR = scipy.sparse.diags(M_RR_diag)
+
+    M_PP = scipy.sparse.diags(np.where(sconnMov.flatten(order="F") > 0, 1, 0) - sconnMov.flatten(order="F"))
+
+    list_1_n_s = list(range(0, N_s))
+    list_1_n_t = list(range(0, N_t))
+    rows_i, cols_j = np.meshgrid(list_1_n_s, list_1_n_t, indexing="ij")
+
+    list_1_n2 = list(range(0, N_s * N_t))
+    M_RP = scipy.sparse.coo_matrix((weights.flatten(order="F"), (list_1_n2, rows_i.flatten(order="F"))), shape=(N_s * N_t, N_t))
+    M_PR = scipy.sparse.coo_matrix((sconnMov.flatten(order="F"), (cols_j.flatten(order="F"), list_1_n2)), shape=(N_t, N_s * N_t))
+
+    clearance = np.broadcast_to(np.exp(-clearance_rate * dt), (N_t,))
+    C_diag = scipy.sparse.diags(clearance)
+    M = scipy.sparse.bmat(((C_diag @ M_RR,      M_PR),
+                           (M_RP @ C_diag,      M_PP)), format="csc")
+
+    synthesis_rate = syngene
+    growth = (synthesis_rate * region_size) * dt
+    B_R = (C_diag @ M_RR) @ growth
+    B_P = (M_RP @ C_diag) @ growth
+    B = np.concatenate((B_R, B_P))
+
+    X = scipy.sparse.linalg.spsolve(scipy.sparse.eye(N_t + N_s * N_t, format="csc") - M, B)
+
+    Rnor0 = X[0:N_t]
+    Pnor0 = np.reshape(X[N_t:N_t + N_s * N_t], (N_s, N_t), order="F")
+    return Rnor0, Pnor0
+
+
 #copy in Steph's code to predict atrophy from I fraction using local degeneration + deafferentation
-def simulate_pathology(atrophy, connectome, v, spread_rate, injection_amount, clearance_gene, dt, eps, k1_atrophy=None, k2_atrophy=None):
+def simulate_pathology(atrophy, connectome, v, spread_rate, injection_amount, clearance_gene, dt, eps,
+                        k1_atrophy=None, k2_atrophy=None, s_method="iterative", s_dt=1e-6):
     #taken from main method of abm_clearance_genes.py
     #inefficient to parse twice but meh we move
 
@@ -149,50 +211,59 @@ def simulate_pathology(atrophy, connectome, v, spread_rate, injection_amount, cl
         sources=sources, targets=targets, dt=1
     )
     # reads input arguments passed to the script through the command line
-        # such as the spread rate, the injection amount, and the total time. 
+        # such as the spread rate, the injection amount, and the total time.
 
     abm.set_growth_process(growth_rate=syngene)
     abm.set_clearance_process(clearance_rate=clearance_rate)
     abm.set_spread_process(v=v)
     abm.update_spread_process(spread_scale=spread_rate)
 
-    # calls several functions to load the model parameters, 
+    # calls several functions to load the model parameters,
         # the clearance rate of proteins, and to set up the growth, clearance, and spreading processes of the ABM
 
-    # growth process
-    #print("Begin protein growth process....")
-    for t in range(30000):
-        prev = np.copy(abm.s_region)
-        abm.growth_step()
-        abm.clearance_step()
-        #abm.clearance_step_thresholded()
-        abm.s_spread_step()
-        #print("Number of regions where S hasn't converged:", np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum())
-        if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
-            break
-    abm.dt = 0.1
-    for t in range(500000000):
-        prev = np.copy(abm.s_region)
-        abm.growth_step()
-        abm.clearance_step()
-        #abm.clearance_step_thresholded()
-        abm.s_spread_step()
-        #print("Number of regions where S hasn't converged:", np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum())
-        if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
-            break
-    abm.dt = dt
-    #print("Third loop")
-    for t in range(1000000000):
-        prev = np.copy(abm.s_region)
-        abm.growth_step()
-        abm.clearance_step()
-        #abm.clearance_step_thresholded()
-        abm.s_spread_step()
-        #print("Number of regions where S hasn't converged:", np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum())
-        if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
-            break
+    # growth process: either the original iterative convergence loop, or the
+    # closed-form Markov steady state (s_method="closed_form", timestep s_dt,
+    # independent of dt which only controls I spreading below)
+    if s_method == "closed_form":
+        s_region, s_edge = markov_s_steady_state(
+            weights, distance, region_size, clearance_rate, syngene, v, spread_rate, s_dt
+        )
+        abm.s_region[:] = s_region
+        abm.s_edge[:] = s_edge
+        abm.dt = dt
+    else:
+        for t in range(30000):
+            prev = np.copy(abm.s_region)
+            abm.growth_step()
+            abm.clearance_step()
+            #abm.clearance_step_thresholded()
+            abm.s_spread_step()
+            #print("Number of regions where S hasn't converged:", np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum())
+            if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
+                break
+        abm.dt = 0.1
+        for t in range(500000000):
+            prev = np.copy(abm.s_region)
+            abm.growth_step()
+            abm.clearance_step()
+            #abm.clearance_step_thresholded()
+            abm.s_spread_step()
+            #print("Number of regions where S hasn't converged:", np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum())
+            if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
+                break
+        abm.dt = dt
+        #print("Third loop")
+        for t in range(1000000000):
+            prev = np.copy(abm.s_region)
+            abm.growth_step()
+            abm.clearance_step()
+            #abm.clearance_step_thresholded()
+            abm.s_spread_step()
+            #print("Number of regions where S hasn't converged:", np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum())
+            if np.where(np.abs(prev - abm.s_region) / abm.s_region > eps, 1, 0).sum() == 0:
+                break
     # runs the protein growth process in three stages
-    # In each stage, the ABM model computes the protein growth, clearance, and spreading steps until the growth process stops, 
+    # In each stage, the ABM model computes the protein growth, clearance, and spreading steps until the growth process stops,
     # which is detected by comparing the changes in protein concentrations between time steps
 
     # spread process
@@ -200,6 +271,17 @@ def simulate_pathology(atrophy, connectome, v, spread_rate, injection_amount, cl
     #print("Inject infectious proteins into {}...".format(abm.targets[seed]))
     abm.injection(seed=seed, amount=injection_amount)
 
+    # preallocated (sparse -> dense) history instead of np.append's O(T^2)
+    # growth -- the Optuna loop calls this once per trial (hundreds of times
+    # per gene, thousands of genes), so per-call speed compounds a lot here.
+    # n_completed tracks how many steps actually ran before any numeric
+    # exception (common for bad random Optuna draws): the history is sliced
+    # down to exactly that many rows below, so a trial that breaks early
+    # still ends up with the same shape/content it would have under the
+    # original np.append version (no trailing all-zero/NaN columns reaching
+    # find_peak_fit's per-timestep correlation search).
+    abm.preallocate_history(total_time)
+    n_completed = 0
     for t in tqdm(range(total_time)):
         try:
             abm.growth_step()
@@ -211,15 +293,17 @@ def simulate_pathology(atrophy, connectome, v, spread_rate, injection_amount, cl
             abm.i_spread_step()
             abm.record_history_region()
             abm.record_history_edge()
+            n_completed += 1
         except:
             print("Numeric exception (see above); moving onto next Optuna trial")
             break
-        
-    infected_region_time=abm.i_region_history
+    abm.finalize_history()
+
+    infected_region_time=abm.i_region_history[:n_completed]
     # Total number of proteins per regions per timestep
- 
+
     if atrophy:
-        normal_region_time=abm.s_region_history
+        normal_region_time=abm.s_region_history[:n_completed]
         dt=abm.dt
 
         total_proteins_region_time = normal_region_time + infected_region_time
@@ -231,7 +315,7 @@ def simulate_pathology(atrophy, connectome, v, spread_rate, injection_amount, cl
         # step 1: Calculate the sum of connectivity strength for each source region
         sum_strength = np.sum(weights, axis=1)
         ratio_weights = weights / np.repeat(sum_strength[:, np.newaxis], len(targets), axis=1)
-    
+
         k1 = k1_atrophy # 0.5
         k2 = k2_atrophy # 0.5
 
@@ -254,7 +338,7 @@ def simulate_pathology(atrophy, connectome, v, spread_rate, injection_amount, cl
     else:
         simulated=infected_region_time.T #do not normalize by total number of proteins
     return simulated
-    
+
 def find_peak_fit(simulated, map):
     #modify from find_opt_params_clearance.r
     input_dir=SIR_input_dir
@@ -273,8 +357,8 @@ def find_peak_fit(simulated, map):
     sim_pathology_data.index=ABA_region_names
 
     alternating_values = np.repeat(["right","left"], nregions)
-    
-    # Create unique row names based on first and last columns 
+
+    # Create unique row names based on first and last columns
     sim_pathology_data.index = [alternating_values[i]+" "+list(sim_pathology_data.index)[i] for i in range(len(sim_pathology_data.index))]
     results=pathology
     common_row_names = np.intersect1d(results.index, sim_pathology_data.index)
@@ -288,13 +372,14 @@ def find_peak_fit(simulated, map):
     # Calculate Spearman correlation with each column in sim_pathology_data
     for i in range(nsteps):
         correlations[i] = scipy.stats.spearmanr(empirical_common.loc[:], simulated_common.loc[:, i]).correlation
-    
+
     peak_corr = np.max(correlations)
     peak_timestep = np.argmax(correlations)
     return (peak_corr, peak_timestep)
 
 class Objective: ###EDIT HERE FOR OPTUNA
-    def __init__(self, atrophy, dt, eps, seed, total_time, clearance_gene, map, connectome, clearance_gene_dir=None): #connectome can either be retro/antero
+    def __init__(self, atrophy, dt, eps, seed, total_time, clearance_gene, map, connectome, clearance_gene_dir=None,
+                 s_method="iterative", s_dt=1e-6): #connectome can either be retro/antero
         # Hold this implementation specific arguments as the fields of the class.
         self.atrophy = atrophy
         self.dt=dt
@@ -306,6 +391,8 @@ class Objective: ###EDIT HERE FOR OPTUNA
         self.clearance_gene_dir = clearance_gene_dir
         self.map = map
         self.connectome = connectome
+        self.s_method = s_method
+        self.s_dt = s_dt
 
     def __call__(self, trial):
         # Calculate an objective value by using the extra arguments.
@@ -313,13 +400,13 @@ class Objective: ###EDIT HERE FOR OPTUNA
             spread_rate = trial.suggest_float("spread_rate",0.0001, 1)
             injection_amount = trial.suggest_float("injection_amount",1,100) #hypothesis: will need more aSyn injected to produce same result w/ increased clearance
 
-            if self.atrophy: 
+            if self.atrophy:
                 k1_atrophy=trial.suggest_float("k1_atrophy",0.001,1)
                 k2_atrophy=trial.suggest_float("k2_atrophy",0.001,1)
-                simulated=simulate_pathology(self.atrophy, self.connectome, v, spread_rate, injection_amount, clearance_gene, dt, eps, k1_atrophy, k2_atrophy)
+                simulated=simulate_pathology(self.atrophy, self.connectome, v, spread_rate, injection_amount, clearance_gene, dt, eps, k1_atrophy, k2_atrophy, self.s_method, self.s_dt)
             else:
-                simulated=simulate_pathology(self.atrophy, connectome, v, spread_rate, injection_amount, clearance_gene, dt, eps)
-                
+                simulated=simulate_pathology(self.atrophy, connectome, v, spread_rate, injection_amount, clearance_gene, dt, eps, s_method=self.s_method, s_dt=self.s_dt)
+
             peak_corr,peak_timestep=find_peak_fit(simulated, map)
             self.peak_timestep = peak_timestep
             trial.set_user_attr("peak_timestep", int(self.peak_timestep))
@@ -341,23 +428,25 @@ if __name__ == "__main__":
     dt = args.dt
     eps=args.eps
     seed = args.seed
-    total_time = args.total_time 
+    total_time = args.total_time
     clearance_gene = args.clearance_gene
     clearance_gene_dir = args.clearance_gene_dir
     map = args.map
     connectome = args.params
+    s_method = args.s_method
+    s_dt = args.s_dt
 
     study_name=args.study_name
     suffix = args.suffix #if you want a .csv file output but no dashboard
     num_trials = args.num_trials
-    
+
     if study_name is None:
         study = optuna.create_study(direction="maximize")
     else:
-        study = optuna.create_study(study_name=study_name, storage="sqlite:///optuna_dbs/"+re.sub(" ", "_", study_name)+".sqlite3",direction="maximize")  
+        study = optuna.create_study(study_name=study_name, storage="sqlite:///optuna_dbs/"+re.sub(" ", "_", study_name)+".sqlite3",direction="maximize")
                                     # Create a new study with database --> can change when you aren't looking at every single gene lol
     #study=optuna.create_study(direction="maximize")
-    study.optimize(Objective(atrophy, dt, eps, seed, total_time, clearance_gene, map, connectome, clearance_gene_dir), n_trials=num_trials, callbacks=[store_best_objective]) #CHANGED FOR HIPP RETRO (rly slow)
+    study.optimize(Objective(atrophy, dt, eps, seed, total_time, clearance_gene, map, connectome, clearance_gene_dir, s_method, s_dt), n_trials=num_trials, callbacks=[store_best_objective]) #CHANGED FOR HIPP RETRO (rly slow)
 
     # Retrieve the best Objective instance
     if best_objective["instance"] is not None:
@@ -380,4 +469,3 @@ if __name__ == "__main__":
     else:
         print(clearance_gene, study.best_trial.value, study.best_trial.params['v'], study.best_trial.params['spread_rate'],
                         study.best_trial.params['injection_amount'], peak_timestep, sep=",") # Show the best value.
-
